@@ -37,6 +37,8 @@ Create two repository or organization secrets:
 
 ### 2) Use the action in a workflow
 
+Create a workflow file (e.g., `.github/workflows/deploy.yml`) with the following content:
+
 ```yaml
 name: Deploy to Emsio Servers
 
@@ -75,9 +77,7 @@ jobs:
   - otherwise → pass
 - Publishes a short step summary so you can see the result at a glance in the run UI.
 
-## Runner Requirements
 
-- A Linux, macOS, or Windows runner **with Bash and cURL available** (e.g., `ubuntu-latest`).
 
 ## Troubleshooting
 
