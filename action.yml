@@ -1,0 +1,86 @@
+name: Deploy to Emsio Servers
+description: Deploys the application to Emsio servers using the deploy endpoint.
+author: Stanislav Škudrna
+branding:
+  color: blue
+  icon: upload-cloud
+
+inputs:
+  deploy_token:
+    description: Deployment token for authentication.
+    required: true
+  project_uuid:
+    description: Project UUID for identifying the project.
+    required: true
+  branch:
+    description: Branch name to deploy. If empty, the current branch is used.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy to server
+      shell: bash
+      env:
+        project_uuid: ${{ inputs.project_uuid }}
+        deploy_token: ${{ inputs.deploy_token }}
+        branch: ${{ inputs.branch }}
+      run: |
+        echo "::add-mask::$deploy_token"
+        set -o pipefail
+        echo "▶️ Volá se deploy endpoint…"
+
+        # Determine branch (input -> GITHUB_REF_NAME -> parse GITHUB_REF -> fallback main)
+        branch_env="$branch"
+        if [ -z "$branch_env" ]; then
+          if [ -n "${GITHUB_REF_NAME:-}" ]; then
+            branch_env="$GITHUB_REF_NAME"
+          elif [ -n "${GITHUB_REF:-}" ]; then
+            branch_env="${GITHUB_REF##*/}"
+          else
+            branch_env="main"
+          fi
+        fi
+        echo "Deploy branch: $branch_env"
+
+        # Temporarily disable pipefail around curl|tee to keep the log file even on curl exit 56
+        set +o pipefail
+        curl --no-buffer --http1.1 -sS -X POST           -H "X-GHAD-Token: $deploy_token"           -H "X-GHRP-Uuid: $project_uuid"           -H "X-GHRP-Name: ${{ github.repository }}"           -H "X-GHRP-Branch: $branch_env"           "https://deploy.emsio.cz/ghad/df/v2/run"           -w "\nHTTP_CODE=%{http_code}\n"         | tee full_response.txt
+        curl_exit=${PIPESTATUS[0]}
+        set -o pipefail
+        echo "CURL_EXIT=$curl_exit" >> full_response.txt
+
+    - name: Publish step summary
+      if: always()
+      shell: bash
+      run: |
+        http_code=$(grep -oE 'HTTP_CODE=[0-9]{3}' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
+        curl_exit=$(grep -oE 'CURL_EXIT=[0-9]+' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
+        # token vypsaný serverem na konci streamu
+        deploy_status=$(grep -oE '::deploy_status::(OK|ERROR)' full_response.txt | tail -n1 | cut -d: -f3)
+
+        if [ "$deploy_status" = "ERROR" ]; then
+          body="❌ Chyba: Server nahlásil deploy_status=ERROR"
+          fail=1
+        elif [ "$http_code" -ne 200 ]; then
+          body="❌ Chyba: Server vrátil $http_code"
+          fail=1
+        elif [ "$curl_exit" -eq 56 ] && [ "$http_code" -eq 200 ] && ! grep -q '::deploy_status::ERROR' full_response.txt; then
+          body="⚠️ Stream se ukončil (curl 56), ale server vrátil 200 a ve výstupu není chyba."
+          fail=0
+        else
+          body="✅ Úspěšně nasazeno na server"
+          fail=0
+        fi
+
+
+        {
+          echo "### 🚀 Deploy výstup"
+          echo
+          echo "**HTTP status:** \`$http_code\`"
+          echo
+          echo '```'
+          echo "$body"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit $fail
