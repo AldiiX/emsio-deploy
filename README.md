@@ -19,7 +19,6 @@ This composite action streams server logs to the workflow, writes a step summary
 | `deploy_token`    | ✅       | Deployment token used to authenticate requests.                            |
 | `project_uuid`    | ✅       | Project identifier on the Emsio platform.                                  |
 | `branch`          | ❌       | Branch name to deploy. Defaults to the current branch (`github.ref_name`). |
-| `dockerfile`      | ❌       | Path to dockerfile.                                                        |
 
 > **Note:** Pass secrets from your workflow via `with:` (composite actions cannot read `secrets.*` directly).
 
@@ -44,23 +43,18 @@ Create a workflow file (e.g., `.github/workflows/deploy.yml`) with the following
 name: Deploy to Emsio Servers
 on:
   push:
-    branches: [ main ] # or any branch you want to deploy from
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
-  contents: read         # required to checkout the code
-  packages: write        # required to deploy to Emsio
-
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Define any environment variables if needed
-      # EXAMPLE_ENV: example_value
+      # environment variables to pass to Emsio
+      # EXAMPLE_VAR: "example value"
       # EXAMPLE_SECRET: ${{ secrets.EXAMPLE_SECRET }}
     steps:
       - name: Deploy to Emsio
@@ -68,8 +62,20 @@ jobs:
         with:
           deploy_token: ${{ secrets.DEPLOY_TOKEN }}
           project_uuid: ${{ secrets.PROJECT_UUID }}
-          # branch: main               # optional, default is current branch
-          # dockerfile: Dockerfile     # optional, default is 'Dockerfile'
+          
+          # optional branch name
+          # branch: main
+          
+          # Optional: multiline KEY=VALUE pairs for docker build --build-arg (not for secrets)
+          #build_args: |
+          #  EXAMPLE_VAR=example_value
+          #  ANOTHER_VAR=another_value
+          
+          # optional ignore env regex
+          #ignore_env_regex: >-
+          #  ^(GITHUB|ACTIONS|RUNNER|CI|PATH|HOME|SHELL|PWD|SHLVL|_|OLDPWD|
+          #  LANG|LC_|DOTNET_|NODE_|NPM_|YARN_|JAVA|ANDROID|CHROME|CHROMIUM|DEBIAN_FRONTEND)
+
 ```
 
 > If you set `branch`, it will be sent as the `X-GHRP-Branch` header. If omitted, the action uses the current branch.
