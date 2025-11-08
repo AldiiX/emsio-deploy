@@ -45,11 +45,6 @@ runs:
         echo "image_ref=$image_ref" >> $GITHUB_OUTPUT
         echo "branch=$branch_env" >> $GITHUB_OUTPUT
 
-    - name: set up qemu
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: all
-
     - name: set up buildx
       uses: docker/setup-buildx-action@v3
 
@@ -79,10 +74,12 @@ runs:
         context: "{{defaultContext}}"
         file: ${{ inputs.dockerfile }}
         # fixed platforms
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/amd64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha,scope=${{ steps.prep.outputs.cache_scope }}
+        cache-to: type=gha,mode=max,scope=${{ steps.prep.outputs.cache_scope }}
 
     - name: show info
       if: ${{ success() }}
