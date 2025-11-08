@@ -7,16 +7,16 @@ branding:
 
 inputs:
   deploy_token:
-    description: deployment token
+    description: Deployment token for authentication.
     required: true
   project_uuid:
-    description: project uuid
+    description: Project UUID for identifying the project.
     required: true
   branch:
-    description: branch name to deploy (defaults to current)
+    description: Branch name to deploy. If empty, the current branch is used.
     required: false
   dockerfile:
-    description: path to Dockerfile
+    description: Path to Dockerfile.
     required: false
     default: Dockerfile
 
@@ -153,7 +153,7 @@ runs:
         fi
 
         {
-          echo "### 🚀 deploy summary"
+          echo "### 🚀 Deploy summary"
           echo
           echo "**HTTP status:** \`$http_code\`"
           echo

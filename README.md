@@ -45,6 +45,7 @@ name: Deploy to Emsio Servers
 on:
   push:
     branches: [ main ] # or any branch you want to deploy from
+  workflow_dispatch:
 
 permissions:
   contents: read         # required to checkout the code
@@ -62,7 +63,7 @@ jobs:
       # EXAMPLE_ENV: example_value
       # EXAMPLE_SECRET: ${{ secrets.EXAMPLE_SECRET }}
     steps:
-      - name: deploy
+      - name: Deploy to Emsio
         uses: AldiiX/emsio-deploy@v4
         with:
           deploy_token: ${{ secrets.DEPLOY_TOKEN }}
