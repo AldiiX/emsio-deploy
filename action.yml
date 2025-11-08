@@ -1,5 +1,5 @@
 name: Deploy to Emsio Servers
-description: Deploys the application to Emsio servers using the deploy endpoint.
+description: Builds & pushes an image in GitHub Actions, then tells the Emsio Server to pull & run it (by digest).
 author: Stanislav Škudrna
 branding:
   color: blue
@@ -7,31 +7,31 @@ branding:
 
 inputs:
   deploy_token:
-    description: Deployment token for authentication.
+    description: deployment token
     required: true
   project_uuid:
-    description: Project UUID for identifying the project.
+    description: project uuid
     required: true
   branch:
-    description: Branch name to deploy. If empty, the current branch is used.
+    description: branch name to deploy (defaults to current)
     required: false
+  dockerfile:
+    description: path to Dockerfile
+    required: false
+    default: Dockerfile
 
 runs:
   using: composite
   steps:
-    - name: Deploy to server
+    - name: compute refs
+      id: prep
       shell: bash
-      env:
-        project_uuid: ${{ inputs.project_uuid }}
-        deploy_token: ${{ inputs.deploy_token }}
-        branch: ${{ inputs.branch }}
       run: |
-        echo "::add-mask::$deploy_token"
-        set -o pipefail
-        echo "▶️ Volá se deploy endpoint…"
+        # note: ghcr requires lower-case owner/repo
+        repo_lc="${GITHUB_REPOSITORY,,}"
+        image_ref="ghcr.io/$repo_lc"
 
-        # Determine branch (input -> GITHUB_REF_NAME -> parse GITHUB_REF -> fallback main)
-        branch_env="$branch"
+        branch_env="${{ inputs.branch }}"
         if [ -z "$branch_env" ]; then
           if [ -n "${GITHUB_REF_NAME:-}" ]; then
             branch_env="$GITHUB_REF_NAME"
@@ -41,46 +41,127 @@ runs:
             branch_env="main"
           fi
         fi
-        echo "Deploy branch: $branch_env"
 
-        # Temporarily disable pipefail around curl|tee to keep the log file even on curl exit 56
+        echo "image_ref=$image_ref" >> $GITHUB_OUTPUT
+        echo "branch=$branch_env" >> $GITHUB_OUTPUT
+
+    - name: set up qemu
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: all
+
+    - name: set up buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: log in to ghcr
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ steps.prep.outputs.image_ref }}
+        tags: |
+          # immutable sha tag
+          type=sha
+          # latest only on default branch
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: build and push
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        # git context without checkout
+        context: "{{defaultContext}}"
+        file: ${{ inputs.dockerfile }}
+        # fixed platforms
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+    - name: show info
+      if: ${{ success() }}
+      shell: bash
+      run: |
+        echo "image: ${{ steps.prep.outputs.image_ref }}"
+        echo "digest: ${{ steps.build.outputs.digest }}"
+        echo "tags:"
+        echo "${{ steps.meta.outputs.tags }}"
+
+    - name: call deploy endpoint (pull & run)
+      if: ${{ success() }}
+      id: call
+      shell: bash
+      env:
+        project_uuid: ${{ inputs.project_uuid }}
+        deploy_token: ${{ inputs.deploy_token }}
+        branch_env: ${{ steps.prep.outputs.branch }}
+        image_ref: ${{ steps.prep.outputs.image_ref }}
+        image_digest: ${{ steps.build.outputs.digest }}
+        repo_name: ${{ github.repository }}
+      run: |
+        echo "::add-mask::$deploy_token"
+        set -o pipefail
+        echo "▶️ Calling deploy endpoint (pull & run)…"
+        echo "   image: $image_ref"
+        echo "   digest: $image_digest"
         set +o pipefail
-        curl --no-buffer --http1.1 -sS -X POST           -H "X-GHAD-Token: $deploy_token"           -H "X-GHRP-Uuid: $project_uuid"           -H "X-GHRP-Name: ${{ github.repository }}"           -H "X-GHRP-Branch: $branch_env"           "https://deploy.emsio.cz/ghad/df/v2/run"           -w "\nHTTP_CODE=%{http_code}\n"         | tee full_response.txt
+        curl --no-buffer --http1.1 -sS -X POST \
+          -H "X-GHAD-Token: $deploy_token" \
+          -H "X-GHRP-Uuid: $project_uuid" \
+          -H "X-GHRP-Name: $repo_name" \
+          -H "X-GHRP-Branch: $branch_env" \
+          -H "X-Image-Ref: $image_ref" \
+          -H "X-Image-Digest: $image_digest" \
+          "https://deploy.emsio.cz/ghad/df/v3/run" \
+          -w "\nHTTP_CODE=%{http_code}\n" | tee full_response.txt
         curl_exit=${PIPESTATUS[0]}
         set -o pipefail
         echo "CURL_EXIT=$curl_exit" >> full_response.txt
 
-    - name: Publish step summary
+    - name: publish step summary
       if: always()
       shell: bash
       run: |
+        # if the log is missing, build failed and deploy did not run
+        if [ ! -f full_response.txt ]; then
+          {
+            echo "### ❌ Build failed"
+            echo
+            echo "deployment was skipped; endpoint was not called."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+
         http_code=$(grep -oE 'HTTP_CODE=[0-9]{3}' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
         curl_exit=$(grep -oE 'CURL_EXIT=[0-9]+' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
-        # token vypsaný serverem na konci streamu
         deploy_status=$(grep -oE '::deploy_status::(OK|ERROR)' full_response.txt | tail -n1 | cut -d: -f3)
 
         if [ "$deploy_status" = "ERROR" ]; then
-          body="❌ Chyba: Server nahlásil deploy_status=ERROR"
-          fail=1
+          body="❌ Error: server reported deploy_status=ERROR"; fail=1
         elif [ "$http_code" -ne 200 ]; then
-          body="❌ Chyba: Server vrátil $http_code"
-          fail=1
+          body="❌ Error: server returned $http_code"; fail=1
         elif [ "$curl_exit" -eq 56 ] && [ "$http_code" -eq 200 ] && ! grep -q '::deploy_status::ERROR' full_response.txt; then
-          body="⚠️ Stream se ukončil (curl 56), ale server vrátil 200 a ve výstupu není chyba."
-          fail=0
+          body="⚠️ Stream ended (curl 56) but server returned 200 and no error was found"; fail=0
         else
-          body="✅ Úspěšně nasazeno na server"
-          fail=0
+          body="✅ Deployed successfully (pull & run)"; fail=0
         fi
 
-
         {
-          echo "### 🚀 Deploy výstup"
+          echo "### 🚀 deploy summary"
           echo
           echo "**HTTP status:** \`$http_code\`"
           echo
           echo '```'
           echo "$body"
+          echo
+          echo "image: ${{ steps.prep.outputs.image_ref }}"
+          echo "digest: ${{ steps.build.outputs.digest }}"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
         exit $fail

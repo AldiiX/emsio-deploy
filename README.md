@@ -14,11 +14,12 @@ This composite action streams server logs to the workflow, writes a step summary
 
 ## Inputs
 
-| Name            | Required | Description                                                                 |
-|-----------------|----------|-----------------------------------------------------------------------------|
-| `deploy_token`  | ✅       | Deployment token used to authenticate requests.                             |
-| `project_uuid`  | ✅       | Project identifier on the Emsio platform.                                   |
-| `branch`        | ❌       | Branch name to deploy. Defaults to the current branch (`github.ref_name`). |
+| Name              | Required | Description                                                                |
+|-------------------|----------|----------------------------------------------------------------------------|
+| `deploy_token`    | ✅       | Deployment token used to authenticate requests.                            |
+| `project_uuid`    | ✅       | Project identifier on the Emsio platform.                                  |
+| `branch`          | ❌       | Branch name to deploy. Defaults to the current branch (`github.ref_name`). |
+| `dockerfile`      | ❌       | Path to dockerfile.                                                        |
 
 > **Note:** Pass secrets from your workflow via `with:` (composite actions cannot read `secrets.*` directly).
 
@@ -41,24 +42,33 @@ Create a workflow file (e.g., `.github/workflows/deploy.yml`) with the following
 
 ```yaml
 name: Deploy to Emsio Servers
-
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main ] # or any branch you want to deploy from
+
+permissions:
+  contents: read         # required to checkout the code
+  packages: write        # required to deploy to Emsio
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    env:
+      # Define any environment variables if needed
+      # EXAMPLE_ENV: example_value
+      # EXAMPLE_SECRET: ${{ secrets.EXAMPLE_SECRET }}
     steps:
-      - name: Deploy to Emsio
-        uses: AldiiX/emsio-deploy@v3
+      - name: deploy
+        uses: AldiiX/emsio-deploy@v4
         with:
           deploy_token: ${{ secrets.DEPLOY_TOKEN }}
           project_uuid: ${{ secrets.PROJECT_UUID }}
-          # branch is optional; defaults to the current branch
-          # branch: main
+          # branch: main               # optional, default is current branch
+          # dockerfile: Dockerfile     # optional, default is 'Dockerfile'
 ```
 
 > If you set `branch`, it will be sent as the `X-GHRP-Branch` header. If omitted, the action uses the current branch.
