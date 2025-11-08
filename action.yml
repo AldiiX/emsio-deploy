@@ -115,7 +115,7 @@ runs:
           -H "X-GHRP-Branch: $branch_env" \
           -H "X-Image-Ref: $image_ref" \
           -H "X-Image-Digest: $image_digest" \
-          "https://deploy.emsio.cz/ghad/df/v3/run" \
+          "https://deploy.emsio.cz/ghad/df/v4/run" \
           -w "\nHTTP_CODE=%{http_code}\n" | tee full_response.txt
         curl_exit=${PIPESTATUS[0]}
         set -o pipefail
