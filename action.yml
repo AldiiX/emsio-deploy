@@ -6,24 +6,15 @@ branding:
   icon: upload-cloud
 
 inputs:
-  deploy_token:
+  app_secret:
     description: Deployment token for authentication.
-    required: true
-  project_uuid:
-    description: Project UUID for identifying the project.
     required: true
   branch:
     description: Branch name to deploy. If empty, the current branch is used.
     required: false
-  build_args:
-    description: multiline KEY=VALUE pairs for docker build --build-arg (not for secrets).
+  env_b64:
+    description: Base64 encoded .env content that will be forwarded in request body.
     required: false
-  ignore_env_regex:
-    description: regex of env var names to exclude from baking into image; empty to include all.
-    required: false
-    default: >-
-      ^(GITHUB|ACTIONS|RUNNER|CI|PATH|HOME|SHELL|PWD|SHLVL|_|OLDPWD|
-      LANG|LC_|DOTNET_|NODE_|NPM_|YARN_|JAVA|ANDROID|CHROME|CHROMIUM|DEBIAN_FRONTEND)
 
 runs:
   using: composite
@@ -31,14 +22,14 @@ runs:
     - name: Deploy to server
       shell: bash
       env:
-        project_uuid: ${{ inputs.project_uuid }}
-        deploy_token: ${{ inputs.deploy_token }}
+        app_secret: ${{ inputs.app_secret }}
         branch: ${{ inputs.branch }}
-        build_args_raw: ${{ inputs.build_args }}
-        ignore_env_regex: ${{ inputs.ignore_env_regex }}
+        env_b64: ${{ inputs.env_b64 }}
+        repository: ${{ github.repository }}
       run: |
-        echo "::add-mask::$deploy_token"
+        echo "::add-mask::$app_secret"
         set -o pipefail
+        echo "▶️ Volá se deploy endpoint…"
 
         # zjisteni vetve
         branch_env="$branch"
@@ -52,41 +43,26 @@ runs:
           fi
         fi
 
-        # nasbirej vsechny env z tohoto stepu (bez systemovych podle ignore regex)
-        # vsechny hodnoty budou zapece do image pres arg->env
-        declare -A kv
-        while IFS='=' read -r k v; do
-          # preskoc prazdny klice
-          [ -z "$k" ] && continue
-          # filtruj systemove promenne
-          if [ -n "${ignore_env_regex:-}" ] && echo "$k" | grep -Eq "$ignore_env_regex"; then
-            continue
-          fi
-          kv["$k"]="$v"
-        done < <(printenv)
+        echo "Deploy branch: $branch_env"
 
-        # serialize na KEY=VALUE (1 radek = 1 polozka)
-        img_lines=""
-        for k in "${!kv[@]}"; do
-          img_lines+="$k=${kv[$k]}"$'\n'
-        done
+        # priprava payloadu do body (simple key=value po radcich)
+        body_payload=$(
+          {
+            printf 'repository=%s\n' "$repository"
+            printf 'branch=%s\n' "$branch_env"
+            printf 'env_b64=%s\n' "$env_b64"
+          }
+        )
 
-        # base64 (jednoradkove)
-        b64() { printf '%s' "$1" | base64 -w 0 2>/dev/null || printf '%s' "$1" | base64; }
-        image_env_b64="$(b64 "${img_lines:-}")"
-        build_args_b64="$(b64 "${build_args_raw:-}")"
-
-        # call deploy endpoint
+        # docasne vypnout pipefail kvuli curl | tee
         set +o pipefail
         curl --no-buffer --http1.1 -sS -X POST \
-          -H "X-GHAD-Token: $deploy_token" \
-          -H "X-GHRP-Uuid: $project_uuid" \
-          -H "X-GHRP-Name: ${{ github.repository }}" \
-          -H "X-GHRP-Branch: $branch_env" \
-          -H "X-GHRP-ImageEnvB64: ${image_env_b64}" \
-          -H "X-GHRP-BuildArgsB64: ${build_args_b64}" \
+          -H "X-GHAD-APPSECRET: $app_secret" \
+          -H "Content-Type: text/plain" \
+          --data-binary "$body_payload" \
           "https://deploy.emsio.cz/ghad/df/v4/run" \
-          -w "\nHTTP_CODE=%{http_code}\n" | tee full_response.txt
+          -w "\nHTTP_CODE=%{http_code}\n" \
+        | tee full_response.txt
         curl_exit=${PIPESTATUS[0]}
         set -o pipefail
         echo "CURL_EXIT=$curl_exit" >> full_response.txt
@@ -97,20 +73,25 @@ runs:
       run: |
         http_code=$(grep -oE 'HTTP_CODE=[0-9]{3}' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
         curl_exit=$(grep -oE 'CURL_EXIT=[0-9]+' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
+        # token vypsany serverem na konci streamu
         deploy_status=$(grep -oE '::deploy_status::(OK|ERROR)' full_response.txt | tail -n1 | cut -d: -f3)
 
         if [ "$deploy_status" = "ERROR" ]; then
-          body="❌ chyba: server nahlasil deploy_status=ERROR"; fail=1
+          body="❌ Chyba: Server nahlásil deploy_status=ERROR"
+          fail=1
         elif [ "$http_code" -ne 200 ]; then
-          body="❌ chyba: server vratil $http_code"; fail=1
+          body="❌ Chyba: Server vrátil $http_code"
+          fail=1
         elif [ "$curl_exit" -eq 56 ] && [ "$http_code" -eq 200 ] && ! grep -q '::deploy_status::ERROR' full_response.txt; then
-          body="⚠️ stream se ukoncil (curl 56), ale server vratil 200 a bez chyby"; fail=0
+          body="⚠️ Stream se ukončil (curl 56), ale server vrátil 200 a ve výstupu není chyba."
+          fail=0
         else
-          body="✅ uspesne nasazeno na server"; fail=0
+          body="✅ Úspěšně nasazeno na server"
+          fail=0
         fi
 
         {
-          echo "### 🚀 Deploy vystup"
+          echo "### 🚀 Deploy výstup"
           echo
           echo "**HTTP status:** \`$http_code\`"
           echo

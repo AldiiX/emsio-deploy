@@ -16,8 +16,8 @@ This composite action streams server logs to the workflow, writes a step summary
 
 | Name              | Required | Description                                                                |
 |-------------------|----------|----------------------------------------------------------------------------|
-| `deploy_token`    | ✅       | Deployment token used to authenticate requests.                            |
-| `project_uuid`    | ✅       | Project identifier on the Emsio platform.                                  |
+| `app_secret`      | ✅       | Deployment token used to authenticate requests.                            |
+| `env_b64`         | ❌       | Base64 encoded .env content that will be forwarded in request body.        |
 | `branch`          | ❌       | Branch name to deploy. Defaults to the current branch (`github.ref_name`). |
 
 > **Note:** Pass secrets from your workflow via `with:` (composite actions cannot read `secrets.*` directly).
@@ -41,41 +41,24 @@ Create a workflow file (e.g., `.github/workflows/deploy.yml`) with the following
 
 ```yaml
 name: Deploy to Emsio Servers
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      # environment variables to pass to Emsio
-      # EXAMPLE_VAR: "example value"
-      # EXAMPLE_SECRET: ${{ secrets.EXAMPLE_SECRET }}
+
     steps:
       - name: Deploy to Emsio
         uses: AldiiX/emsio-deploy@v4
         with:
-          deploy_token: ${{ secrets.DEPLOY_TOKEN }}
-          project_uuid: ${{ secrets.PROJECT_UUID }}
-          
-          # optional branch name
+          app_secret: ${{ secrets.APP_SECRET }}
+          # branch is optional; if it is not specified, the current branch is used.
           # branch: main
-          
-          # Optional: multiline KEY=VALUE pairs for docker build --build-arg (not for secrets)
-          #build_args: |
-          #  EXAMPLE_VAR=example_value
-          #  ANOTHER_VAR=another_value
-          
-          # optional ignore env regex
-          #ignore_env_regex: >-
-          #  ^(GITHUB|ACTIONS|RUNNER|CI|PATH|HOME|SHELL|PWD|SHLVL|_|OLDPWD|
-          #  LANG|LC_|DOTNET_|NODE_|NPM_|YARN_|JAVA|ANDROID|CHROME|CHROMIUM|DEBIAN_FRONTEND)
-
+          env_b64: ${{ secrets.ENV_B64 }}
 ```
 
 > If you set `branch`, it will be sent as the `X-GHRP-Branch` header. If omitted, the action uses the current branch.
