@@ -9,94 +9,16 @@ inputs:
   app_secret:
     description: Deployment token for authentication.
     required: true
-  branch:
-    description: Branch name to deploy. If empty, the current branch is used.
-    required: false
-  env_b64:
-    description: Base64 encoded .env content that will be forwarded in request body.
-    required: false
 
 runs:
   using: composite
   steps:
     - name: Deploy to server
       shell: bash
-      env:
-        app_secret: ${{ inputs.app_secret }}
-        branch: ${{ inputs.branch }}
-        env_b64: ${{ inputs.env_b64 }}
-        repository: ${{ github.repository }}
       run: |
-        echo "::add-mask::$app_secret"
-        set -o pipefail
-        echo "▶️ Volá se deploy endpoint…"
+        set -euo pipefail
 
-        # zjisteni vetve
-        branch_env="$branch"
-        if [ -z "$branch_env" ]; then
-          if [ -n "${GITHUB_REF_NAME:-}" ]; then
-            branch_env="$GITHUB_REF_NAME"
-          elif [ -n "${GITHUB_REF:-}" ]; then
-            branch_env="${GITHUB_REF##*/}"
-          else
-            branch_env="main"
-          fi
-        fi
-
-        echo "Deploy branch: $branch_env"
-
-        # priprava payloadu do body (simple key=value po radcich)
-        body_payload=$(
-          {
-            printf 'repository=%s\n' "$repository"
-            printf 'branch=%s\n' "$branch_env"
-            printf 'env_b64=%s\n' "$env_b64"
-          }
-        )
-
-        # docasne vypnout pipefail kvuli curl | tee
-        set +o pipefail
-        curl --no-buffer --http1.1 -sS -X POST \
-          -H "X-GHAD-APPSECRET: $app_secret" \
-          -H "Content-Type: text/plain" \
-          --data-binary "$body_payload" \
-          "https://deploy.emsio.cz/ghad/df/v4/run" \
-          -w "\nHTTP_CODE=%{http_code}\n" \
-        | tee full_response.txt
-        curl_exit=${PIPESTATUS[0]}
-        set -o pipefail
-        echo "CURL_EXIT=$curl_exit" >> full_response.txt
-
-    - name: Publish step summary
-      if: always()
-      shell: bash
-      run: |
-        http_code=$(grep -oE 'HTTP_CODE=[0-9]{3}' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
-        curl_exit=$(grep -oE 'CURL_EXIT=[0-9]+' full_response.txt | tail -n1 | cut -d= -f2 || echo 0)
-        # token vypsany serverem na konci streamu
-        deploy_status=$(grep -oE '::deploy_status::(OK|ERROR)' full_response.txt | tail -n1 | cut -d: -f3)
-
-        if [ "$deploy_status" = "ERROR" ]; then
-          body="❌ Chyba: Server nahlásil deploy_status=ERROR"
-          fail=1
-        elif [ "$http_code" -ne 200 ]; then
-          body="❌ Chyba: Server vrátil $http_code"
-          fail=1
-        elif [ "$curl_exit" -eq 56 ] && [ "$http_code" -eq 200 ] && ! grep -q '::deploy_status::ERROR' full_response.txt; then
-          body="⚠️ Stream se ukončil (curl 56), ale server vrátil 200 a ve výstupu není chyba."
-          fail=0
-        else
-          body="✅ Úspěšně nasazeno na server"
-          fail=0
-        fi
-
-        {
-          echo "### 🚀 Deploy výstup"
-          echo
-          echo "**HTTP status:** \`$http_code\`"
-          echo
-          echo '```'
-          echo "$body"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-        exit $fail
+        curl -sS -f \
+          -X POST "https://deploy.emsio.cz/ghad/df/v4/run" \
+          -H "Authorization: Bearer ${{ inputs.app_secret }}" \
+          -H "X-SHA: ${{ github.sha }}"
