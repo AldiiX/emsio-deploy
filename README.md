@@ -30,6 +30,9 @@ This action does not define outputs.
 
 Create a repository (or organization) secret:
 - `APP_SECRET`
+- `PROJECT_UUID`
+- `REGISTRY_USER`
+- `REGISTRY_PASSWORD`
 
 > Your build/push secrets (registry user/password etc.) belong to your workflow, not this action.
 
