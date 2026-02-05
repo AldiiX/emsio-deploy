@@ -54,18 +54,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/login-action@v3
+      - name: Log in to Emsio Docker Registry
+        uses: docker/login-action@v3
         with:
           registry: registry.emsio.cz
           username: robot$${{ secrets.REGISTRY_USER }}+ci
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - uses: docker/build-push-action@v6
+      - name: Build and Push Docker Image to Emsio Registry
+        uses: docker/build-push-action@v6
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           push: true
+          #secrets: |
+          #  PROP=VALUE
+          #  PROP2=${{ secrets.SOMESECRET }}
           tags: |
             registry.emsio.cz/${{ secrets.REGISTRY_USER }}/${{ secrets.PROJECT_UUID }}:latest
 
